@@ -1,0 +1,211 @@
+---
+- hosts: inetRouter
+  become: yes
+  tasks:
+    - name: set up forward packages across outers
+      sysctl:
+        name: net.ipv4.conf.all.forwarding
+        value: '1'
+        state: present
+
+    - name: Configure NAT using iptables # Без этого не будет доступа в инет для подключенных машин
+      iptables:
+        chain: POSTROUTING
+        table: nat
+        jump: MASQUERADE
+        out_interface: eth0
+
+    - name: Block port 22
+      ansible.builtin.iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: 22
+        source: 192.168.255.5
+        jump: DROP
+
+    - name: Ensure /etc/iptables/rules.v4 exists
+      become: yes
+      file:
+        path: /etc/iptables/rules.v4
+        state: touch
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Save iptables rules
+      ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
+
+    - name: Install knockd
+      apt:
+        name: knockd
+        state: present
+
+    - name: Install nmap
+      apt:
+        name: nmap
+        state: present
+
+    - name: Install net-tools
+      apt:
+        name: net-tools
+        state: present
+
+    - name: Copy knockd configuration
+      copy:
+        src: ./knockd.conf
+        dest: /etc/knockd.conf
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Start and enable knockd
+      service:
+        name: knockd
+        state: started
+        enabled: yes
+
+    - name: Copy knock script
+      copy:
+        src: ./knock.sh
+        dest: /root
+        owner: root
+        group: root
+        mode: 0644
+
+
+- hosts: inetRouter2
+  become: yes
+  tasks:
+    - name: Install net-tools
+      apt:
+        name: net-tools
+        state: present
+
+    - name: set up forward packages across routers
+      sysctl:
+        name: net.ipv4.conf.all.forwarding
+        value: '1'
+        state: present
+
+    - name: Copy netplan configuration
+      copy:
+        src: ./inetRouter2-netplan.yml
+        dest: /etc/netplan/01-netcfg.yaml
+
+    - name: Apply netplan configuration
+      command: netplan apply
+
+    - name: Ensure iptables is installed
+      package:
+        name: iptables
+        state: present
+
+    - name: Create iptables_rules.ipv4
+      copy:
+          dest: /etc/iptables_rules.ipv4
+          src: ./inetRouter2-iptables
+          owner: root
+          group: root
+          mode: '0644'
+
+    - name: Create iptables file
+      copy:
+          dest: /etc/network/if-up.d/iptables
+          src: ./iptables-run.sh
+          owner: root
+          group: root
+          mode: '0755'
+    - name: Run script
+      command: /etc/network/if-up.d/iptables
+
+- hosts: centralRouter
+  become: yes
+  tasks:
+    - name: Copy knock script
+      copy:
+        src: ./knock.sh
+        dest: /root
+        owner: root
+        group: root
+        mode: 0755
+
+    - name: Install nmap
+      apt:
+        name: nmap
+        state: present
+  
+    - name: Install net-tools
+      apt:
+        name: net-tools
+        state: present
+
+    - name: Copy netplan configuration
+      copy:
+        src: ./centralRouter-netplan.yml
+        dest: /etc/netplan/01-netcfg.yaml
+
+    - name: Apply netplan configuration
+      command: netplan apply
+ 
+    - name: Create iptables_rules.ipv4
+      copy:
+          dest: /etc/iptables_rules.ipv4
+          src: ./centalRouter-iptables
+          owner: root
+          group: root
+          mode: '0644'
+
+    - name: Create iptables file
+      copy:
+          dest: /etc/network/if-up.d/iptables
+          src: ./iptables-run.sh
+          owner: root
+          group: root
+          mode: '0755'
+    - name: Run script
+      command: /etc/network/if-up.d/iptables
+
+- hosts: centralServer
+  become: yes
+  tasks:
+    - name: Install net-tools
+      apt:
+        name: net-tools
+        state: present
+    - name: set up forward packages across routers
+      sysctl:
+        name: net.ipv4.conf.all.forwarding
+        value: '1'
+        state: present
+
+    - name: Copy sources
+      copy:
+        src: ./list
+        dest: /etc/apt/sources.list
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+
+    - name: Ensure apt cache is updated
+      apt:
+        update_cache: yes
+
+    - name: ensure nginx is at the latest version
+      apt:
+        name: nginx
+        state: latest
+    - name: start nginx
+      service: 
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Copy netplan configuration
+      copy:
+        src: ./centralServer-netplan.yml
+        dest: /etc/netplan/01-netcfg.yaml
+
+    - name: Apply netplan configuration
+      command: netplan apply
+
